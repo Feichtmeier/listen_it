@@ -19,15 +19,24 @@ void main() {
 
     destListenable.removeListener(handler);
 
+    // With no listeners the chain detaches from its source and stops tracking
+    // it; the derived value is refreshed again on the next observation.
     sourceListenable.value = 4711;
 
     expect(destValue, '42');
+    expect(destListenable.value, '42'); // unchanged while unobserved
+
+    // Re-observing resubscribes and resyncs to the current source value.
+    destListenable.addListener(handler);
     expect(destListenable.value, '4711');
+
+    destListenable.removeListener(handler);
   });
 
   test('Select Test', () {
-    final sourceListenable =
-        ValueNotifier<StringIntWrapper>(StringIntWrapper("fiz", 0));
+    final sourceListenable = ValueNotifier<StringIntWrapper>(
+      StringIntWrapper("fiz", 0),
+    );
     final stringDestListenable = sourceListenable.select<String>((x) => x.s);
 
     String? stringDestValue;
@@ -105,32 +114,34 @@ void main() {
     expect(destValue, 1);
   });
   test(
-      'Listen Test ChangeNotifier with internal cancel after first notification',
-      () {
-    final listenable = ChangeNotifier();
+    'Listen Test ChangeNotifier with internal cancel after first notification',
+    () {
+      final listenable = ChangeNotifier();
 
-    int destValue = 0;
-    listenable.listen((subscription) {
-      destValue++;
-      if (destValue == 1) {
-        subscription.cancel();
-      }
-    });
+      int destValue = 0;
+      listenable.listen((subscription) {
+        destValue++;
+        if (destValue == 1) {
+          subscription.cancel();
+        }
+      });
 
-    listenable.notifyListeners();
-    expect(destValue, 1);
+      listenable.notifyListeners();
+      expect(destValue, 1);
 
-    listenable.notifyListeners();
+      listenable.notifyListeners();
 
-    expect(destValue, 1);
-  });
+      expect(destValue, 1);
+    },
+  );
 
   test('Where Test', () {
     final listenable = ValueNotifier<int>(0);
 
     final destValues = <int>[];
-    final subscription =
-        listenable.where((x) => x.isEven).listen((x, _) => destValues.add(x));
+    final subscription = listenable
+        .where((x) => x.isEven)
+        .listen((x, _) => destValues.add(x));
 
     listenable.value = 42;
     listenable.value = 43;
@@ -189,27 +200,28 @@ void main() {
   });
 
   test(
-      'Where Test - no fallbackValue when initial does not match (backward compatible)',
-      () {
-    // Without fallback, initial value passes through even if it doesn't match
-    final listenable = ValueNotifier<int>(5); // odd number
+    'Where Test - no fallbackValue when initial does not match (backward compatible)',
+    () {
+      // Without fallback, initial value passes through even if it doesn't match
+      final listenable = ValueNotifier<int>(5); // odd number
 
-    final filtered = listenable.where((x) => x.isEven);
+      final filtered = listenable.where((x) => x.isEven);
 
-    // No fallback, so use initial value even though it's odd (backward compatible)
-    expect(filtered.value, 5);
+      // No fallback, so use initial value even though it's odd (backward compatible)
+      expect(filtered.value, 5);
 
-    final destValues = <int>[];
-    final subscription = filtered.listen((x, _) => destValues.add(x));
+      final destValues = <int>[];
+      final subscription = filtered.listen((x, _) => destValues.add(x));
 
-    listenable.value = 42; // even - should pass
-    listenable.value = 43; // odd - should not pass
-    listenable.value = 44; // even - should pass
+      listenable.value = 42; // even - should pass
+      listenable.value = 43; // odd - should not pass
+      listenable.value = 44; // even - should pass
 
-    expect(destValues, [42, 44]);
+      expect(destValues, [42, 44]);
 
-    subscription.cancel();
-  });
+      subscription.cancel();
+    },
+  );
 
   test('async Test', () async {
     final listenable = ValueNotifier<int>(0);
@@ -231,12 +243,12 @@ void main() {
     final destValues = <StringIntWrapper>[];
     var subscription = listenable1
         .combineLatest<String, StringIntWrapper>(
-      listenable2,
-      (i, s) => StringIntWrapper(s, i),
-    )
+          listenable2,
+          (i, s) => StringIntWrapper(s, i),
+        )
         .listen((x, _) {
-      destValues.add(x);
-    });
+          destValues.add(x);
+        });
 
     listenable1.value = 42;
     listenable1.value = 43;
@@ -257,12 +269,12 @@ void main() {
     destValues.clear();
     subscription = listenable1
         .combineLatest<String, StringIntWrapper>(
-      listenable2,
-      (i, s) => StringIntWrapper(s, i),
-    )
+          listenable2,
+          (i, s) => StringIntWrapper(s, i),
+        )
         .listen((x, _) {
-      destValues.add(x);
-    });
+          destValues.add(x);
+        });
     listenable1.value = 47;
     expect(destValues[0].toString(), 'First:47');
     expect(destValues.length, 1);
@@ -276,13 +288,13 @@ void main() {
     final destValues = <String>[];
     var subscription = listenable1
         .combineLatest3<String, String, String>(
-      listenable2,
-      listenable3,
-      (i, j, s) => "$i:$j:$s",
-    )
+          listenable2,
+          listenable3,
+          (i, j, s) => "$i:$j:$s",
+        )
         .listen((x, _) {
-      destValues.add(x);
-    });
+          destValues.add(x);
+        });
 
     listenable1.value = '42';
     listenable1.value = '43';
@@ -305,13 +317,13 @@ void main() {
     destValues.clear();
     subscription = listenable1
         .combineLatest3<String, String, String>(
-      listenable2,
-      listenable3,
-      (i, j, s) => "$i:$j:$s",
-    )
+          listenable2,
+          listenable3,
+          (i, j, s) => "$i:$j:$s",
+        )
         .listen((x, _) {
-      destValues.add(x);
-    });
+          destValues.add(x);
+        });
     listenable1.value = "47";
     expect(destValues[0], '47:First:NewVal3');
     expect(destValues.length, 1);
@@ -326,14 +338,14 @@ void main() {
     final destValues = <String>[];
     final subscription = listenable1
         .combineLatest4<String, String, String, String>(
-      listenable2,
-      listenable3,
-      listenable4,
-      (i, j, k, s) => "$i:$j:$k:$s",
-    )
+          listenable2,
+          listenable3,
+          listenable4,
+          (i, j, k, s) => "$i:$j:$k:$s",
+        )
         .listen((x, _) {
-      destValues.add(x);
-    });
+          destValues.add(x);
+        });
 
     listenable1.value = '42';
     listenable1.value = '43';
@@ -366,15 +378,15 @@ void main() {
     final destValues = <String>[];
     final subscription = listenable1
         .combineLatest5<String, String, String, String, String>(
-      listenable2,
-      listenable3,
-      listenable4,
-      listenable5,
-      (i, j, k, l, s) => "$i:$j:$k:$l:$s",
-    )
+          listenable2,
+          listenable3,
+          listenable4,
+          listenable5,
+          (i, j, k, l, s) => "$i:$j:$k:$l:$s",
+        )
         .listen((x, _) {
-      destValues.add(x);
-    });
+          destValues.add(x);
+        });
 
     listenable1.value = '42';
     listenable1.value = '43';
@@ -410,16 +422,16 @@ void main() {
     final destValues = <String>[];
     final subscription = listenable1
         .combineLatest6<String, String, String, String, String, String>(
-      listenable2,
-      listenable3,
-      listenable4,
-      listenable5,
-      listenable6,
-      (i, j, k, l, m, s) => "$i:$j:$k:$l:$m:$s",
-    )
+          listenable2,
+          listenable3,
+          listenable4,
+          listenable5,
+          listenable6,
+          (i, j, k, l, m, s) => "$i:$j:$k:$l:$m:$s",
+        )
         .listen((x, _) {
-      destValues.add(x);
-    });
+          destValues.add(x);
+        });
 
     listenable1.value = '42';
     listenable1.value = '43';
@@ -454,9 +466,10 @@ void main() {
 
     final destValues = <int>[];
     final subscription = listenable1
-        .mergeWith([listenable2, listenable3, listenable4]).listen((x, _) {
-      destValues.add(x);
-    });
+        .mergeWith([listenable2, listenable3, listenable4])
+        .listen((x, _) {
+          destValues.add(x);
+        });
 
     listenable2.value = 42;
     listenable1.value = 43;
@@ -483,10 +496,7 @@ void main() {
     final listenable3 = ValueNotifier<int>(0);
 
     final destValues = <int>[];
-    final mergedListenable = listenable1.mergeWith([
-      listenable2,
-      listenable3,
-    ]);
+    final mergedListenable = listenable1.mergeWith([listenable2, listenable3]);
     var subscription = mergedListenable.listen((x, _) {
       destValues.add(x);
     });
@@ -561,8 +571,10 @@ void main() {
 
   test('CustomValueNotifier with error in handler and error handler', () {
     Object? error;
-    final notifier =
-        CustomValueNotifier<int>(4711, onError: (e, stackTrace) => error = e);
+    final notifier = CustomValueNotifier<int>(
+      4711,
+      onError: (e, stackTrace) => error = e,
+    );
 
     notifier.addListener(() {
       throw Exception('Error in handler');
@@ -577,32 +589,35 @@ void main() {
     expect(error, isA<Exception>());
   });
   test(
-      'CustomValueNotifier async notification with error in handler and error handler',
-      () async {
-    Object? error;
-    final notifier = CustomValueNotifier<int>(
-      4711,
-      asyncNotification: true,
-      onError: (e, stackTrace) => error = e,
-    );
+    'CustomValueNotifier async notification with error in handler and error handler',
+    () async {
+      Object? error;
+      final notifier = CustomValueNotifier<int>(
+        4711,
+        asyncNotification: true,
+        onError: (e, stackTrace) => error = e,
+      );
 
-    notifier.addListener(() {
-      throw Exception('Error in handler');
-    });
+      notifier.addListener(() {
+        throw Exception('Error in handler');
+      });
 
-    expect(notifier.value, 4711);
-    notifier.value = 4711;
-    expect(notifier.value, 4711);
-    expect(error, null);
-    notifier.value = 42;
-    await Future<void>.delayed(Duration.zero);
-    expect(notifier.value, 42);
-    expect(error, isA<Exception>());
-  });
+      expect(notifier.value, 4711);
+      notifier.value = 4711;
+      expect(notifier.value, 4711);
+      expect(error, null);
+      notifier.value = 42;
+      await Future<void>.delayed(Duration.zero);
+      expect(notifier.value, 42);
+      expect(error, isA<Exception>());
+    },
+  );
 
   test('CustomValueNotifier a manual notify', () {
-    final notifier =
-        CustomValueNotifier<int>(4711, mode: CustomNotifierMode.manual);
+    final notifier = CustomValueNotifier<int>(
+      4711,
+      mode: CustomNotifierMode.manual,
+    );
     int val = 0;
     int callCount = 0;
 
@@ -624,8 +639,10 @@ void main() {
     expect(callCount, 1);
   });
   test('CustomValueNotifier  always notify', () {
-    final notifier =
-        CustomValueNotifier<int>(4711, mode: CustomNotifierMode.always);
+    final notifier = CustomValueNotifier<int>(
+      4711,
+      mode: CustomNotifierMode.always,
+    );
     int val = 0;
     int callCount = 0;
 
@@ -645,8 +662,10 @@ void main() {
   });
 
   test('no double chain subscriptions', () {
-    final notifier =
-        CustomValueNotifier<int>(0, mode: CustomNotifierMode.always);
+    final notifier = CustomValueNotifier<int>(
+      0,
+      mode: CustomNotifierMode.always,
+    );
     int callCount = 0;
     notifier.listen((v, _) {
       callCount++;

@@ -16,20 +16,24 @@ import 'package:watch_it/watch_it.dart';
 ///    - They are NOT recreated on each event
 ///    - Same objects process all events throughout their lifetime
 ///
-/// 2. **Chains are "hot" (eager), not "cold" (lazy)**
-///    - Most operators call init() in their constructor
-///    - Chains subscribe to their sources immediately upon creation
-///    - This happens BEFORE any listener is added
-///    - Chains stay subscribed even when they have zero listeners
+/// 2. **Chains attach lazily and detach automatically**
+///    - Eager operators call init() in their constructor, but a chain only
+///      needs to stay subscribed to its source while it is itself observed
+///    - When the last listener is removed, the chain detaches from its source
+///      (symmetric to attaching) so it never keeps the source alive or leaks a
+///      listener on it while unobserved
+///    - While unobserved the chain does NOT track the source; its value is
+///      refreshed from the source the moment it is observed again
 ///
 /// 3. **Resubscription works correctly**
 ///    - You can remove all listeners and add new ones later
-///    - The chain continues to track its source the whole time
-///    - This was the reason for choosing hot subscription over lazy
+///    - On re-attach the chain re-subscribes to the source AND resyncs its
+///      value to the current source value, so it is never stale
 ///
 /// 4. **Memory management considerations**
-///    - Chains without dispose() stay in memory and keep processing events
-///    - Must call dispose() to unsubscribe from source and free memory
+///    - A chain that has listeners keeps processing events; once its last
+///      listener leaves it releases the source automatically
+///    - dispose() is still available to tear a chain down explicitly
 ///    - Variable assignment vs immediate .listen() creates different chain objects
 ///    - But both behave identically in terms of lifecycle
 ///
@@ -41,10 +45,10 @@ import 'package:watch_it/watch_it.dart';
 ///
 /// ## Architecture Notes:
 ///
-/// The "hot" subscription model was chosen to avoid a previous bug where
-/// chains would not re-subscribe after all listeners were removed. This
-/// ensures reliable resubscription behavior at the cost of keeping chains
-/// active even without listeners.
+/// Chains attach to their source on the first listener and detach on the last,
+/// mirroring how a widget subscribes only while mounted. Re-attaching resyncs
+/// the derived value from the source, so resubscription is reliable and no
+/// listener is leaked on the source while the chain is unobserved.
 
 // Test subclasses that track constructor and handler calls
 // Global counter for ALL TrackedMapValueNotifier instances created
@@ -319,6 +323,13 @@ class _TestRegisterHandlerInlineWidget extends WatchingWidget {
   }
 }
 
+// A ValueNotifier that exposes whether it currently has any listeners, so tests
+// can assert that derived chains attach/detach from their source correctly.
+class _ObservableSource extends ValueNotifier<int> {
+  _ObservableSource(super.value);
+  bool get hasAnyListeners => hasListeners;
+}
+
 // Test controller class that holds chains
 class TestController {
   final ValueNotifier<int> source;
@@ -480,22 +491,37 @@ void main() {
       source.dispose();
     });
 
-    test('chain stays subscribed even with zero listeners', () {
-      final source = ValueNotifier<int>(0);
+    test('chain detaches from source when the last listener is removed', () {
+      final source = _ObservableSource(0);
       final chain = source.map((x) => x * 2);
 
-      // Add and then remove listener
+      // Add and then remove a listener.
       void listener() {}
       chain.addListener(listener);
+      expect(source.hasAnyListeners, isTrue);
       source.value = 5;
       expect(chain.value, 10);
 
       chain.removeListener(listener);
 
-      // Chain still updates even with no listeners!
+      // With zero listeners the chain detaches from the source (no leak) and
+      // stops tracking it.
+      expect(source.hasAnyListeners, isFalse);
       source.value = 7;
-      expect(chain.value, 14); // Chain still tracking source
+      expect(chain.value, 10); // unchanged while unobserved
 
+      // Re-attaching resubscribes AND resyncs to the current source value.
+      final seen = <int>[];
+      void listener2() => seen.add(chain.value);
+      chain.addListener(listener2);
+      expect(source.hasAnyListeners, isTrue);
+      expect(chain.value, 14); // resynced on re-attach
+
+      source.value = 9;
+      expect(chain.value, 18);
+      expect(seen, [18]);
+
+      chain.removeListener(listener2);
       if (chain is FunctionalValueNotifier) {
         (chain as FunctionalValueNotifier).dispose();
       }
@@ -567,8 +593,9 @@ void main() {
   });
 
   group('ValueListenableBuilder Integration Tests', () {
-    testWidgets('chain objects remain stable with ValueListenableBuilder',
-        (WidgetTester tester) async {
+    testWidgets('chain objects remain stable with ValueListenableBuilder', (
+      WidgetTester tester,
+    ) async {
       final source = ValueNotifier<int>(0);
       final chain = source.where((x) => x.isEven).map((x) => 'Value: $x');
 
@@ -615,8 +642,9 @@ void main() {
       source.dispose();
     });
 
-    testWidgets('chain with filter only rebuilds when condition passes',
-        (WidgetTester tester) async {
+    testWidgets('chain with filter only rebuilds when condition passes', (
+      WidgetTester tester,
+    ) async {
       final source = ValueNotifier<int>(0);
       final chain = source.where((x) => x.isEven);
 
@@ -670,107 +698,109 @@ void main() {
     });
 
     testWidgets(
-        'chain created INSIDE builder recreates on each rebuild (anti-pattern)',
-        (WidgetTester tester) async {
-      final source = ValueNotifier<int>(0);
-      final chainIdentities = <int>[];
+      'chain created INSIDE builder recreates on each rebuild (anti-pattern)',
+      (WidgetTester tester) async {
+        final source = ValueNotifier<int>(0);
+        final chainIdentities = <int>[];
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: ValueListenableBuilder<int>(
-              valueListenable: source,
-              builder: (context, value, child) {
-                // ANTI-PATTERN: Creating chain inside builder!
-                final chain = source.map((x) => x * 2);
-                chainIdentities.add(identityHashCode(chain));
-                return Text('Value: ${chain.value}');
-              },
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: ValueListenableBuilder<int>(
+                valueListenable: source,
+                builder: (context, value, child) {
+                  // ANTI-PATTERN: Creating chain inside builder!
+                  final chain = source.map((x) => x * 2);
+                  chainIdentities.add(identityHashCode(chain));
+                  return Text('Value: ${chain.value}');
+                },
+              ),
             ),
           ),
-        ),
-      );
+        );
 
-      // Initial build creates first chain
-      expect(chainIdentities.length, 1);
-      final firstIdentity = chainIdentities[0];
+        // Initial build creates first chain
+        expect(chainIdentities.length, 1);
+        final firstIdentity = chainIdentities[0];
 
-      // Trigger rebuild
-      source.value = 1;
-      await tester.pump();
+        // Trigger rebuild
+        source.value = 1;
+        await tester.pump();
 
-      // New chain created!
-      expect(chainIdentities.length, 2);
-      expect(chainIdentities[1], isNot(firstIdentity)); // Different object!
+        // New chain created!
+        expect(chainIdentities.length, 2);
+        expect(chainIdentities[1], isNot(firstIdentity)); // Different object!
 
-      // Another rebuild
-      source.value = 2;
-      await tester.pump();
+        // Another rebuild
+        source.value = 2;
+        await tester.pump();
 
-      // Another new chain!
-      expect(chainIdentities.length, 3);
-      expect(chainIdentities[2], isNot(firstIdentity));
-      expect(chainIdentities[2], isNot(chainIdentities[1]));
+        // Another new chain!
+        expect(chainIdentities.length, 3);
+        expect(chainIdentities[2], isNot(firstIdentity));
+        expect(chainIdentities[2], isNot(chainIdentities[1]));
 
-      // All three identities are different - memory leak!
-      expect(chainIdentities.toSet().length, 3);
+        // All three identities are different - memory leak!
+        expect(chainIdentities.toSet().length, 3);
 
-      source.dispose();
-    });
+        source.dispose();
+      },
+    );
 
     testWidgets(
-        'chain created inline in valueListenable parameter (anti-pattern)',
-        (WidgetTester tester) async {
-      final source = ValueNotifier<int>(0);
-      final chainIdentities = <int>[];
-      int buildCount = 0;
+      'chain created inline in valueListenable parameter (anti-pattern)',
+      (WidgetTester tester) async {
+        final source = ValueNotifier<int>(0);
+        final chainIdentities = <int>[];
+        int buildCount = 0;
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: _TestValueListenableBuilderInlineWidget(
-              source: source,
-              onBuild: (identity) {
-                buildCount++;
-                chainIdentities.add(identity);
-              },
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: _TestValueListenableBuilderInlineWidget(
+                source: source,
+                onBuild: (identity) {
+                  buildCount++;
+                  chainIdentities.add(identity);
+                },
+              ),
             ),
           ),
-        ),
-      );
+        );
 
-      // Initial build
-      expect(buildCount, 1);
-      expect(chainIdentities.length, 1);
-      final firstIdentity = chainIdentities[0];
-      expect(find.text('Value: 0'), findsOneWidget);
+        // Initial build
+        expect(buildCount, 1);
+        expect(chainIdentities.length, 1);
+        final firstIdentity = chainIdentities[0];
+        expect(find.text('Value: 0'), findsOneWidget);
 
-      // Fire events - each rebuild creates new chain
-      source.value = 5;
-      await tester.pump();
+        // Fire events - each rebuild creates new chain
+        source.value = 5;
+        await tester.pump();
 
-      // New chain created!
-      expect(buildCount, 2);
-      expect(chainIdentities.length, 2);
-      expect(chainIdentities[1], isNot(firstIdentity)); // Different object!
-      expect(find.text('Value: 10'), findsOneWidget);
+        // New chain created!
+        expect(buildCount, 2);
+        expect(chainIdentities.length, 2);
+        expect(chainIdentities[1], isNot(firstIdentity)); // Different object!
+        expect(find.text('Value: 10'), findsOneWidget);
 
-      // Another rebuild
-      source.value = 7;
-      await tester.pump();
+        // Another rebuild
+        source.value = 7;
+        await tester.pump();
 
-      // Another new chain!
-      expect(buildCount, 3);
-      expect(chainIdentities.length, 3);
-      expect(chainIdentities[2], isNot(firstIdentity));
-      expect(chainIdentities[2], isNot(chainIdentities[1]));
-      expect(find.text('Value: 14'), findsOneWidget);
+        // Another new chain!
+        expect(buildCount, 3);
+        expect(chainIdentities.length, 3);
+        expect(chainIdentities[2], isNot(firstIdentity));
+        expect(chainIdentities[2], isNot(chainIdentities[1]));
+        expect(find.text('Value: 14'), findsOneWidget);
 
-      // All three identities are different - memory leak!
-      expect(chainIdentities.toSet().length, 3);
+        // All three identities are different - memory leak!
+        expect(chainIdentities.toSet().length, 3);
 
-      source.dispose();
-    });
+        source.dispose();
+      },
+    );
   });
 
   group('watch_it Integration Tests', () {
@@ -781,8 +811,9 @@ void main() {
       }
     });
 
-    testWidgets('watchValue with chain created outside build',
-        (WidgetTester tester) async {
+    testWidgets('watchValue with chain created outside build', (
+      WidgetTester tester,
+    ) async {
       final source = ValueNotifier<int>(0);
       final chain = source.map((x) => x * 2);
       final chainIdentity = identityHashCode(chain);
@@ -836,8 +867,9 @@ void main() {
       source.dispose();
     });
 
-    testWidgets('watchValue with chain created INSIDE build (anti-pattern)',
-        (WidgetTester tester) async {
+    testWidgets('watchValue with chain created INSIDE build (anti-pattern)', (
+      WidgetTester tester,
+    ) async {
       final source = ValueNotifier<int>(0);
 
       // Register source in get_it so the widget can access it
@@ -883,135 +915,138 @@ void main() {
     });
 
     testWidgets(
-        'watchValue with chain created inline - default caching prevents leak',
-        (WidgetTester tester) async {
-      final source = ValueNotifier<int>(0);
-      _totalMapChainsCreated = 0; // Reset counter
+      'watchValue with chain created inline - default caching prevents leak',
+      (WidgetTester tester) async {
+        final source = ValueNotifier<int>(0);
+        _totalMapChainsCreated = 0; // Reset counter
 
-      // Register source and model in get_it
-      di.registerSingleton<ValueNotifier<int>>(source);
-      final model = ChainModel(source.map((x) => x * 2));
-      di.registerSingleton<ChainModel>(model);
+        // Register source and model in get_it
+        di.registerSingleton<ValueNotifier<int>>(source);
+        final model = ChainModel(source.map((x) => x * 2));
+        di.registerSingleton<ChainModel>(model);
 
-      final capturedValues = <int>[];
-      int buildCount = 0;
+        final capturedValues = <int>[];
+        int buildCount = 0;
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: _TestWatchValueInlineWidget(
-              source: source,
-              onBuild: (value) {
-                buildCount++;
-                capturedValues.add(value);
-              },
-              // allowObservableChange defaults to false - caching enabled
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: _TestWatchValueInlineWidget(
+                source: source,
+                onBuild: (value) {
+                  buildCount++;
+                  capturedValues.add(value);
+                },
+                // allowObservableChange defaults to false - caching enabled
+              ),
             ),
           ),
-        ),
-      );
+        );
 
-      // Initial build - one chain created
-      expect(buildCount, 1);
-      expect(capturedValues[0], 0);
-      expect(
-        _totalMapChainsCreated,
-        1,
-        reason: 'First build creates one chain',
-      );
+        // Initial build - one chain created
+        expect(buildCount, 1);
+        expect(capturedValues[0], 0);
+        expect(
+          _totalMapChainsCreated,
+          1,
+          reason: 'First build creates one chain',
+        );
 
-      // Fire events - selector cached, NO new chains created
-      source.value = 5;
-      await tester.pump();
-      expect(buildCount, 2);
-      expect(capturedValues[1], 10);
-      expect(
-        _totalMapChainsCreated,
-        1,
-        reason: 'Caching prevents new chain creation',
-      );
+        // Fire events - selector cached, NO new chains created
+        source.value = 5;
+        await tester.pump();
+        expect(buildCount, 2);
+        expect(capturedValues[1], 10);
+        expect(
+          _totalMapChainsCreated,
+          1,
+          reason: 'Caching prevents new chain creation',
+        );
 
-      source.value = 7;
-      await tester.pump();
-      expect(buildCount, 3);
-      expect(capturedValues[2], 14);
-      expect(
-        _totalMapChainsCreated,
-        1,
-        reason: 'Still only one chain - no memory leak!',
-      );
+        source.value = 7;
+        await tester.pump();
+        expect(buildCount, 3);
+        expect(capturedValues[2], 14);
+        expect(
+          _totalMapChainsCreated,
+          1,
+          reason: 'Still only one chain - no memory leak!',
+        );
 
-      di.unregister<ChainModel>();
-      di.unregister<ValueNotifier<int>>();
-      source.dispose();
-    });
+        di.unregister<ChainModel>();
+        di.unregister<ValueNotifier<int>>();
+        source.dispose();
+      },
+    );
 
     testWidgets(
-        'watchValue with chain created inline + allowObservableChange=true - DOES leak',
-        (WidgetTester tester) async {
-      final source = ValueNotifier<int>(0);
-      _totalMapChainsCreated = 0; // Reset counter
+      'watchValue with chain created inline + allowObservableChange=true - DOES leak',
+      (WidgetTester tester) async {
+        final source = ValueNotifier<int>(0);
+        _totalMapChainsCreated = 0; // Reset counter
 
-      // Register source and model in get_it
-      di.registerSingleton<ValueNotifier<int>>(source);
-      final model = ChainModel(source.map((x) => x * 2));
-      di.registerSingleton<ChainModel>(model);
+        // Register source and model in get_it
+        di.registerSingleton<ValueNotifier<int>>(source);
+        final model = ChainModel(source.map((x) => x * 2));
+        di.registerSingleton<ChainModel>(model);
 
-      final capturedValues = <int>[];
-      int buildCount = 0;
+        final capturedValues = <int>[];
+        int buildCount = 0;
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: _TestWatchValueInlineWidget(
-              source: source,
-              onBuild: (value) {
-                buildCount++;
-                capturedValues.add(value);
-              },
-              allowObservableChange: true, // Disable caching - anti-pattern!
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: _TestWatchValueInlineWidget(
+                source: source,
+                onBuild: (value) {
+                  buildCount++;
+                  capturedValues.add(value);
+                },
+                allowObservableChange: true, // Disable caching - anti-pattern!
+              ),
             ),
           ),
-        ),
-      );
+        );
 
-      // Initial build - one chain created
-      expect(buildCount, 1);
-      expect(capturedValues[0], 0);
-      expect(
-        _totalMapChainsCreated,
-        1,
-        reason: 'First build creates one chain',
-      );
+        // Initial build - one chain created
+        expect(buildCount, 1);
+        expect(capturedValues[0], 0);
+        expect(
+          _totalMapChainsCreated,
+          1,
+          reason: 'First build creates one chain',
+        );
 
-      // Fire events - selector called every build, NEW chains created
-      source.value = 5;
-      await tester.pump();
-      expect(buildCount, 2);
-      expect(capturedValues[1], 10);
-      expect(
-        _totalMapChainsCreated,
-        2,
-        reason: 'Without caching, second build creates new chain',
-      );
+        // Fire events - selector called every build, NEW chains created
+        source.value = 5;
+        await tester.pump();
+        expect(buildCount, 2);
+        expect(capturedValues[1], 10);
+        expect(
+          _totalMapChainsCreated,
+          2,
+          reason: 'Without caching, second build creates new chain',
+        );
 
-      source.value = 7;
-      await tester.pump();
-      expect(buildCount, 3);
-      expect(capturedValues[2], 14);
-      expect(
-        _totalMapChainsCreated,
-        3,
-        reason: 'Third build creates third chain - memory leak!',
-      );
+        source.value = 7;
+        await tester.pump();
+        expect(buildCount, 3);
+        expect(capturedValues[2], 14);
+        expect(
+          _totalMapChainsCreated,
+          3,
+          reason: 'Third build creates third chain - memory leak!',
+        );
 
-      di.unregister<ChainModel>();
-      di.unregister<ValueNotifier<int>>();
-      source.dispose();
-    });
+        di.unregister<ChainModel>();
+        di.unregister<ValueNotifier<int>>();
+        source.dispose();
+      },
+    );
 
-    testWidgets('registerHandler with chain created outside',
-        (WidgetTester tester) async {
+    testWidgets('registerHandler with chain created outside', (
+      WidgetTester tester,
+    ) async {
       final source = ValueNotifier<int>(0);
       final chain = source.map((x) => x * 2);
       final chainIdentity = identityHashCode(chain);
@@ -1071,88 +1106,89 @@ void main() {
     });
 
     testWidgets(
-        'registerHandler with inline chain + allowObservableChange=true - DOES leak when widget rebuilds',
-        (WidgetTester tester) async {
-      final source = ValueNotifier<int>(0);
-      final rebuildTrigger = ValueNotifier<int>(0);
-      _totalMapChainsCreated = 0; // Reset counter
+      'registerHandler with inline chain + allowObservableChange=true - DOES leak when widget rebuilds',
+      (WidgetTester tester) async {
+        final source = ValueNotifier<int>(0);
+        final rebuildTrigger = ValueNotifier<int>(0);
+        _totalMapChainsCreated = 0; // Reset counter
 
-      // Register model in get_it
-      final model = ChainModel(rebuildTrigger);
-      di.registerSingleton<ChainModel>(model);
+        // Register model in get_it
+        final model = ChainModel(rebuildTrigger);
+        di.registerSingleton<ChainModel>(model);
 
-      int buildCount = 0;
-      final handlerValues = <int>[];
+        int buildCount = 0;
+        final handlerValues = <int>[];
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: _TestRegisterHandlerInlineWidget(
-              source: source,
-              rebuildTrigger: rebuildTrigger,
-              onBuild: () {
-                buildCount++;
-              },
-              onHandler: (value) {
-                handlerValues.add(value);
-              },
-              allowObservableChange: true, // Disable caching - anti-pattern!
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: _TestRegisterHandlerInlineWidget(
+                source: source,
+                rebuildTrigger: rebuildTrigger,
+                onBuild: () {
+                  buildCount++;
+                },
+                onHandler: (value) {
+                  handlerValues.add(value);
+                },
+                allowObservableChange: true, // Disable caching - anti-pattern!
+              ),
             ),
           ),
-        ),
-      );
+        );
 
-      // Initial build
-      expect(buildCount, 1);
-      expect(
-        _totalMapChainsCreated,
-        1,
-        reason: 'First build creates one chain',
-      );
+        // Initial build
+        expect(buildCount, 1);
+        expect(
+          _totalMapChainsCreated,
+          1,
+          reason: 'First build creates one chain',
+        );
 
-      // Fire events - registerHandler doesn't cause rebuilds, just calls handler
-      source.value = 5;
-      await tester.pump();
-      expect(handlerValues, [10]); // Handler called
-      expect(buildCount, 1); // Still no rebuild from registerHandler
-      expect(
-        _totalMapChainsCreated,
-        1,
-        reason: 'No rebuild, so no new chain created',
-      );
+        // Fire events - registerHandler doesn't cause rebuilds, just calls handler
+        source.value = 5;
+        await tester.pump();
+        expect(handlerValues, [10]); // Handler called
+        expect(buildCount, 1); // Still no rebuild from registerHandler
+        expect(
+          _totalMapChainsCreated,
+          1,
+          reason: 'No rebuild, so no new chain created',
+        );
 
-      // Now trigger a rebuild externally using rebuildTrigger
-      rebuildTrigger.value = 1;
-      await tester.pump();
-      expect(buildCount, 2); // Rebuild happened!
-      expect(
-        _totalMapChainsCreated,
-        2,
-        reason: 'Rebuild without caching creates new chain - leak!',
-      );
+        // Now trigger a rebuild externally using rebuildTrigger
+        rebuildTrigger.value = 1;
+        await tester.pump();
+        expect(buildCount, 2); // Rebuild happened!
+        expect(
+          _totalMapChainsCreated,
+          2,
+          reason: 'Rebuild without caching creates new chain - leak!',
+        );
 
-      // Trigger another rebuild
-      rebuildTrigger.value = 2;
-      await tester.pump();
-      expect(buildCount, 3); // Another rebuild
-      expect(
-        _totalMapChainsCreated,
-        3,
-        reason: 'Third rebuild creates third chain - memory leak!',
-      );
+        // Trigger another rebuild
+        rebuildTrigger.value = 2;
+        await tester.pump();
+        expect(buildCount, 3); // Another rebuild
+        expect(
+          _totalMapChainsCreated,
+          3,
+          reason: 'Third rebuild creates third chain - memory leak!',
+        );
 
-      // Fire source event - handler still works
-      source.value = 7;
-      await tester.pump();
-      expect(handlerValues, [10, 14]); // Handler called
+        // Fire source event - handler still works
+        source.value = 7;
+        await tester.pump();
+        expect(handlerValues, [10, 14]); // Handler called
 
-      // IMPORTANT: registerHandler with allowObservableChange=true causes leaks
-      // when widgets rebuild from ANY source (watchValue, setState, etc.)
+        // IMPORTANT: registerHandler with allowObservableChange=true causes leaks
+        // when widgets rebuild from ANY source (watchValue, setState, etc.)
 
-      // Cleanup
-      di.unregister<ChainModel>();
-      source.dispose();
-      rebuildTrigger.dispose();
-    });
+        // Cleanup
+        di.unregister<ChainModel>();
+        source.dispose();
+        rebuildTrigger.dispose();
+      },
+    );
   });
 }

@@ -11,6 +11,8 @@ abstract class FunctionalValueNotifier<TIn, TOut> extends ValueNotifier<TOut> {
   @protected
   bool chainInitialized = false;
 
+  bool _resyncOnReattach = false;
+
   FunctionalValueNotifier(
     super.initialValue,
     this.previousInChain, {
@@ -34,8 +36,33 @@ abstract class FunctionalValueNotifier<TIn, TOut> extends ValueNotifier<TOut> {
   void addListener(VoidCallback listener) {
     if (!chainInitialized) {
       init(previousInChain);
+      if (_resyncOnReattach) {
+        _resyncOnReattach = false;
+        // Refresh the derived value from the source after having been detached,
+        // so a reused chain isn't stale once it becomes observed again.
+        internalHandler();
+      }
     }
     super.addListener(listener);
+  }
+
+  /// Detaches from the source. Symmetric to [setupChain]; called automatically
+  /// when the last listener is removed so an unobserved chain doesn't keep the
+  /// source subscription (and thus the source itself) alive.
+  @protected
+  @mustCallSuper
+  void teardownChain() {
+    previousInChain.removeListener(internalHandler);
+    chainInitialized = false;
+    _resyncOnReattach = true;
+  }
+
+  @override
+  void removeListener(VoidCallback listener) {
+    super.removeListener(listener);
+    if (chainInitialized && !hasListeners) {
+      teardownChain();
+    }
   }
 
   @override
@@ -126,18 +153,23 @@ class DebouncedValueNotifier<T> extends FunctionalValueNotifier<T, T> {
     internalHandler = () {
       debounceTimer?.cancel();
       debounceTimer = //
-          Timer(debounceDuration, () => value = previousInChain.value);
+      Timer(
+        debounceDuration,
+        () => value = previousInChain.value,
+      );
     };
     setupChain();
+  }
+
+  @override
+  void teardownChain() {
+    debounceTimer?.cancel();
+    super.teardownChain();
   }
 }
 
 class AsyncValueNotifier<T> extends FunctionalValueNotifier<T, T> {
-  AsyncValueNotifier(
-    super.initialValue,
-    super.previousInChain, {
-    super.lazy,
-  });
+  AsyncValueNotifier(super.initialValue, super.previousInChain, {super.lazy});
 
   @override
   void init(ValueListenable<T> previousInChain) {
@@ -156,6 +188,7 @@ class CombiningValueNotifier<TIn1, TIn2, TOut> extends ValueNotifier<TOut> {
   final CombiningFunction2<TIn1, TIn2, TOut> combiner;
   late VoidCallback internalHandler;
   bool chainInitialized = false;
+  bool _resyncOnReattach = false;
 
   CombiningValueNotifier(
     super.initialValue,
@@ -174,8 +207,8 @@ class CombiningValueNotifier<TIn1, TIn2, TOut> extends ValueNotifier<TOut> {
     ValueListenable<TIn1> previousInChain1,
     ValueListenable<TIn2> previousInChain2,
   ) {
-    internalHandler =
-        () => value = combiner(previousInChain1.value, previousInChain2.value);
+    internalHandler = () =>
+        value = combiner(previousInChain1.value, previousInChain2.value);
     previousInChain1.addListener(internalHandler);
     previousInChain2.addListener(internalHandler);
     chainInitialized = true;
@@ -187,8 +220,23 @@ class CombiningValueNotifier<TIn1, TIn2, TOut> extends ValueNotifier<TOut> {
     /// set up so we don't have to do it again.
     if (!chainInitialized) {
       init(previousInChain1, previousInChain2);
+      if (_resyncOnReattach) {
+        _resyncOnReattach = false;
+        internalHandler();
+      }
     }
     super.addListener(listener);
+  }
+
+  @override
+  void removeListener(VoidCallback listener) {
+    super.removeListener(listener);
+    if (chainInitialized && !hasListeners) {
+      previousInChain1.removeListener(internalHandler);
+      previousInChain2.removeListener(internalHandler);
+      chainInitialized = false;
+      _resyncOnReattach = true;
+    }
   }
 
   @override
@@ -201,11 +249,8 @@ class CombiningValueNotifier<TIn1, TIn2, TOut> extends ValueNotifier<TOut> {
   }
 }
 
-typedef CombiningFunction3<TIn1, TIn2, TIn3, TOut> = TOut Function(
-  TIn1,
-  TIn2,
-  TIn3,
-);
+typedef CombiningFunction3<TIn1, TIn2, TIn3, TOut> =
+    TOut Function(TIn1, TIn2, TIn3);
 
 class CombiningValueNotifier3<TIn1, TIn2, TIn3, TOut>
     extends ValueNotifier<TOut> {
@@ -215,6 +260,7 @@ class CombiningValueNotifier3<TIn1, TIn2, TIn3, TOut>
   final CombiningFunction3<TIn1, TIn2, TIn3, TOut> combiner;
   late VoidCallback internalHandler;
   bool chainInitialized = false;
+  bool _resyncOnReattach = false;
 
   CombiningValueNotifier3(
     super.initialValue,
@@ -235,10 +281,10 @@ class CombiningValueNotifier3<TIn1, TIn2, TIn3, TOut>
     ValueListenable<TIn3> previousInChain3,
   ) {
     internalHandler = () => value = combiner(
-          previousInChain1.value,
-          previousInChain2.value,
-          previousInChain3.value,
-        );
+      previousInChain1.value,
+      previousInChain2.value,
+      previousInChain3.value,
+    );
     previousInChain1.addListener(internalHandler);
     previousInChain2.addListener(internalHandler);
     previousInChain3.addListener(internalHandler);
@@ -251,8 +297,24 @@ class CombiningValueNotifier3<TIn1, TIn2, TIn3, TOut>
     /// set up so we don't have to do it again.
     if (!chainInitialized) {
       init(previousInChain1, previousInChain2, previousInChain3);
+      if (_resyncOnReattach) {
+        _resyncOnReattach = false;
+        internalHandler();
+      }
     }
     super.addListener(listener);
+  }
+
+  @override
+  void removeListener(VoidCallback listener) {
+    super.removeListener(listener);
+    if (chainInitialized && !hasListeners) {
+      previousInChain1.removeListener(internalHandler);
+      previousInChain2.removeListener(internalHandler);
+      previousInChain3.removeListener(internalHandler);
+      chainInitialized = false;
+      _resyncOnReattach = true;
+    }
   }
 
   @override
@@ -266,12 +328,8 @@ class CombiningValueNotifier3<TIn1, TIn2, TIn3, TOut>
   }
 }
 
-typedef CombiningFunction4<TIn1, TIn2, TIn3, TIn4, TOut> = TOut Function(
-  TIn1,
-  TIn2,
-  TIn3,
-  TIn4,
-);
+typedef CombiningFunction4<TIn1, TIn2, TIn3, TIn4, TOut> =
+    TOut Function(TIn1, TIn2, TIn3, TIn4);
 
 class CombiningValueNotifier4<TIn1, TIn2, TIn3, TIn4, TOut>
     extends ValueNotifier<TOut> {
@@ -282,6 +340,7 @@ class CombiningValueNotifier4<TIn1, TIn2, TIn3, TIn4, TOut>
   final CombiningFunction4<TIn1, TIn2, TIn3, TIn4, TOut> combiner;
   late VoidCallback internalHandler;
   bool chainInitialized = false;
+  bool _resyncOnReattach = false;
 
   CombiningValueNotifier4(
     super.initialValue,
@@ -309,11 +368,11 @@ class CombiningValueNotifier4<TIn1, TIn2, TIn3, TIn4, TOut>
     ValueListenable<TIn4> previousInChain4,
   ) {
     internalHandler = () => value = combiner(
-          previousInChain1.value,
-          previousInChain2.value,
-          previousInChain3.value,
-          previousInChain4.value,
-        );
+      previousInChain1.value,
+      previousInChain2.value,
+      previousInChain3.value,
+      previousInChain4.value,
+    );
     previousInChain1.addListener(internalHandler);
     previousInChain2.addListener(internalHandler);
     previousInChain3.addListener(internalHandler);
@@ -332,8 +391,25 @@ class CombiningValueNotifier4<TIn1, TIn2, TIn3, TIn4, TOut>
         previousInChain3,
         previousInChain4,
       );
+      if (_resyncOnReattach) {
+        _resyncOnReattach = false;
+        internalHandler();
+      }
     }
     super.addListener(listener);
+  }
+
+  @override
+  void removeListener(VoidCallback listener) {
+    super.removeListener(listener);
+    if (chainInitialized && !hasListeners) {
+      previousInChain1.removeListener(internalHandler);
+      previousInChain2.removeListener(internalHandler);
+      previousInChain3.removeListener(internalHandler);
+      previousInChain4.removeListener(internalHandler);
+      chainInitialized = false;
+      _resyncOnReattach = true;
+    }
   }
 
   @override
@@ -348,13 +424,8 @@ class CombiningValueNotifier4<TIn1, TIn2, TIn3, TIn4, TOut>
   }
 }
 
-typedef CombiningFunction5<TIn1, TIn2, TIn3, TIn4, TIn5, TOut> = TOut Function(
-  TIn1,
-  TIn2,
-  TIn3,
-  TIn4,
-  TIn5,
-);
+typedef CombiningFunction5<TIn1, TIn2, TIn3, TIn4, TIn5, TOut> =
+    TOut Function(TIn1, TIn2, TIn3, TIn4, TIn5);
 
 class CombiningValueNotifier5<TIn1, TIn2, TIn3, TIn4, TIn5, TOut>
     extends ValueNotifier<TOut> {
@@ -366,6 +437,7 @@ class CombiningValueNotifier5<TIn1, TIn2, TIn3, TIn4, TIn5, TOut>
   final CombiningFunction5<TIn1, TIn2, TIn3, TIn4, TIn5, TOut> combiner;
   late VoidCallback internalHandler;
   bool chainInitialized = false;
+  bool _resyncOnReattach = false;
 
   CombiningValueNotifier5(
     super.initialValue,
@@ -396,12 +468,12 @@ class CombiningValueNotifier5<TIn1, TIn2, TIn3, TIn4, TIn5, TOut>
     ValueListenable<TIn5> previousInChain5,
   ) {
     internalHandler = () => value = combiner(
-          previousInChain1.value,
-          previousInChain2.value,
-          previousInChain3.value,
-          previousInChain4.value,
-          previousInChain5.value,
-        );
+      previousInChain1.value,
+      previousInChain2.value,
+      previousInChain3.value,
+      previousInChain4.value,
+      previousInChain5.value,
+    );
     previousInChain1.addListener(internalHandler);
     previousInChain2.addListener(internalHandler);
     previousInChain3.addListener(internalHandler);
@@ -422,8 +494,26 @@ class CombiningValueNotifier5<TIn1, TIn2, TIn3, TIn4, TIn5, TOut>
         previousInChain4,
         previousInChain5,
       );
+      if (_resyncOnReattach) {
+        _resyncOnReattach = false;
+        internalHandler();
+      }
     }
     super.addListener(listener);
+  }
+
+  @override
+  void removeListener(VoidCallback listener) {
+    super.removeListener(listener);
+    if (chainInitialized && !hasListeners) {
+      previousInChain1.removeListener(internalHandler);
+      previousInChain2.removeListener(internalHandler);
+      previousInChain3.removeListener(internalHandler);
+      previousInChain4.removeListener(internalHandler);
+      previousInChain5.removeListener(internalHandler);
+      chainInitialized = false;
+      _resyncOnReattach = true;
+    }
   }
 
   @override
@@ -439,8 +529,8 @@ class CombiningValueNotifier5<TIn1, TIn2, TIn3, TIn4, TIn5, TOut>
   }
 }
 
-typedef CombiningFunction6<TIn1, TIn2, TIn3, TIn4, TIn5, TIn6, TOut> = TOut
-    Function(TIn1, TIn2, TIn3, TIn4, TIn5, TIn6);
+typedef CombiningFunction6<TIn1, TIn2, TIn3, TIn4, TIn5, TIn6, TOut> =
+    TOut Function(TIn1, TIn2, TIn3, TIn4, TIn5, TIn6);
 
 class CombiningValueNotifier6<TIn1, TIn2, TIn3, TIn4, TIn5, TIn6, TOut>
     extends ValueNotifier<TOut> {
@@ -453,6 +543,7 @@ class CombiningValueNotifier6<TIn1, TIn2, TIn3, TIn4, TIn5, TIn6, TOut>
   final CombiningFunction6<TIn1, TIn2, TIn3, TIn4, TIn5, TIn6, TOut> combiner;
   late VoidCallback internalHandler;
   bool chainInitialized = false;
+  bool _resyncOnReattach = false;
 
   CombiningValueNotifier6(
     super.initialValue,
@@ -486,13 +577,13 @@ class CombiningValueNotifier6<TIn1, TIn2, TIn3, TIn4, TIn5, TIn6, TOut>
     ValueListenable<TIn6> previousInChain6,
   ) {
     internalHandler = () => value = combiner(
-          previousInChain1.value,
-          previousInChain2.value,
-          previousInChain3.value,
-          previousInChain4.value,
-          previousInChain5.value,
-          previousInChain6.value,
-        );
+      previousInChain1.value,
+      previousInChain2.value,
+      previousInChain3.value,
+      previousInChain4.value,
+      previousInChain5.value,
+      previousInChain6.value,
+    );
     previousInChain1.addListener(internalHandler);
     previousInChain2.addListener(internalHandler);
     previousInChain3.addListener(internalHandler);
@@ -515,8 +606,27 @@ class CombiningValueNotifier6<TIn1, TIn2, TIn3, TIn4, TIn5, TIn6, TOut>
         previousInChain5,
         previousInChain6,
       );
+      if (_resyncOnReattach) {
+        _resyncOnReattach = false;
+        internalHandler();
+      }
     }
     super.addListener(listener);
+  }
+
+  @override
+  void removeListener(VoidCallback listener) {
+    super.removeListener(listener);
+    if (chainInitialized && !hasListeners) {
+      previousInChain1.removeListener(internalHandler);
+      previousInChain2.removeListener(internalHandler);
+      previousInChain3.removeListener(internalHandler);
+      previousInChain4.removeListener(internalHandler);
+      previousInChain5.removeListener(internalHandler);
+      previousInChain6.removeListener(internalHandler);
+      chainInitialized = false;
+      _resyncOnReattach = true;
+    }
   }
 
   @override
@@ -546,19 +656,23 @@ class MergingValueNotifiers<T> extends FunctionalValueNotifier<T, T> {
 
   @override
   void init(ValueListenable<T> previousInChain) {
-    disposeFuncs = mergeWith.map<VoidCallback>(
-      (notifier) {
-        final notifyHandler = () => value = notifier.value;
-        notifier.addListener(notifyHandler);
-        return () => notifier.removeListener(notifyHandler);
-      },
-    ).toList();
+    disposeFuncs = mergeWith.map<VoidCallback>((notifier) {
+      final notifyHandler = () => value = notifier.value;
+      notifier.addListener(notifyHandler);
+      return () => notifier.removeListener(notifyHandler);
+    }).toList();
 
     internalHandler = () => value = previousInChain.value;
     setupChain();
   }
 
   void _callSelf(VoidCallback handler) => handler.call();
+
+  @override
+  void teardownChain() {
+    disposeFuncs.forEach(_callSelf);
+    super.teardownChain();
+  }
 
   @override
   void dispose() {
