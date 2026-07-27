@@ -139,9 +139,8 @@ void main() {
     final listenable = ValueNotifier<int>(0);
 
     final destValues = <int>[];
-    final subscription = listenable
-        .where((x) => x.isEven)
-        .listen((x, _) => destValues.add(x));
+    final subscription =
+        listenable.where((x) => x.isEven).listen((x, _) => destValues.add(x));
 
     listenable.value = 42;
     listenable.value = 43;
@@ -243,12 +242,12 @@ void main() {
     final destValues = <StringIntWrapper>[];
     var subscription = listenable1
         .combineLatest<String, StringIntWrapper>(
-          listenable2,
-          (i, s) => StringIntWrapper(s, i),
-        )
+      listenable2,
+      (i, s) => StringIntWrapper(s, i),
+    )
         .listen((x, _) {
-          destValues.add(x);
-        });
+      destValues.add(x);
+    });
 
     listenable1.value = 42;
     listenable1.value = 43;
@@ -269,12 +268,12 @@ void main() {
     destValues.clear();
     subscription = listenable1
         .combineLatest<String, StringIntWrapper>(
-          listenable2,
-          (i, s) => StringIntWrapper(s, i),
-        )
+      listenable2,
+      (i, s) => StringIntWrapper(s, i),
+    )
         .listen((x, _) {
-          destValues.add(x);
-        });
+      destValues.add(x);
+    });
     listenable1.value = 47;
     expect(destValues[0].toString(), 'First:47');
     expect(destValues.length, 1);
@@ -288,13 +287,13 @@ void main() {
     final destValues = <String>[];
     var subscription = listenable1
         .combineLatest3<String, String, String>(
-          listenable2,
-          listenable3,
-          (i, j, s) => "$i:$j:$s",
-        )
+      listenable2,
+      listenable3,
+      (i, j, s) => "$i:$j:$s",
+    )
         .listen((x, _) {
-          destValues.add(x);
-        });
+      destValues.add(x);
+    });
 
     listenable1.value = '42';
     listenable1.value = '43';
@@ -317,13 +316,13 @@ void main() {
     destValues.clear();
     subscription = listenable1
         .combineLatest3<String, String, String>(
-          listenable2,
-          listenable3,
-          (i, j, s) => "$i:$j:$s",
-        )
+      listenable2,
+      listenable3,
+      (i, j, s) => "$i:$j:$s",
+    )
         .listen((x, _) {
-          destValues.add(x);
-        });
+      destValues.add(x);
+    });
     listenable1.value = "47";
     expect(destValues[0], '47:First:NewVal3');
     expect(destValues.length, 1);
@@ -338,14 +337,14 @@ void main() {
     final destValues = <String>[];
     final subscription = listenable1
         .combineLatest4<String, String, String, String>(
-          listenable2,
-          listenable3,
-          listenable4,
-          (i, j, k, s) => "$i:$j:$k:$s",
-        )
+      listenable2,
+      listenable3,
+      listenable4,
+      (i, j, k, s) => "$i:$j:$k:$s",
+    )
         .listen((x, _) {
-          destValues.add(x);
-        });
+      destValues.add(x);
+    });
 
     listenable1.value = '42';
     listenable1.value = '43';
@@ -378,15 +377,15 @@ void main() {
     final destValues = <String>[];
     final subscription = listenable1
         .combineLatest5<String, String, String, String, String>(
-          listenable2,
-          listenable3,
-          listenable4,
-          listenable5,
-          (i, j, k, l, s) => "$i:$j:$k:$l:$s",
-        )
+      listenable2,
+      listenable3,
+      listenable4,
+      listenable5,
+      (i, j, k, l, s) => "$i:$j:$k:$l:$s",
+    )
         .listen((x, _) {
-          destValues.add(x);
-        });
+      destValues.add(x);
+    });
 
     listenable1.value = '42';
     listenable1.value = '43';
@@ -422,16 +421,16 @@ void main() {
     final destValues = <String>[];
     final subscription = listenable1
         .combineLatest6<String, String, String, String, String, String>(
-          listenable2,
-          listenable3,
-          listenable4,
-          listenable5,
-          listenable6,
-          (i, j, k, l, m, s) => "$i:$j:$k:$l:$m:$s",
-        )
+      listenable2,
+      listenable3,
+      listenable4,
+      listenable5,
+      listenable6,
+      (i, j, k, l, m, s) => "$i:$j:$k:$l:$m:$s",
+    )
         .listen((x, _) {
-          destValues.add(x);
-        });
+      destValues.add(x);
+    });
 
     listenable1.value = '42';
     listenable1.value = '43';
@@ -466,10 +465,9 @@ void main() {
 
     final destValues = <int>[];
     final subscription = listenable1
-        .mergeWith([listenable2, listenable3, listenable4])
-        .listen((x, _) {
-          destValues.add(x);
-        });
+        .mergeWith([listenable2, listenable3, listenable4]).listen((x, _) {
+      destValues.add(x);
+    });
 
     listenable2.value = 42;
     listenable1.value = 43;
@@ -688,6 +686,166 @@ void main() {
     expect(mapNotifier.value, 2);
     expect(mapCallCount, 1);
     expect(chainCallCount, 2); // 1 on init, 1 after notifier.value = 1;
+  });
+
+  test('debounce detaches on last listener and resyncs on reattach', () async {
+    final source = ValueNotifier<int>(0);
+    final debounced = source.debounce(const Duration(milliseconds: 10));
+
+    void listener() {}
+    debounced.addListener(listener);
+
+    source.value = 1;
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(debounced.value, 1);
+
+    // Removing the last listener tears down the chain (cancels the timer).
+    debounced.removeListener(listener);
+
+    source.value = 2;
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    // Detached while unobserved: value stays at the last observed value.
+    expect(debounced.value, 1);
+
+    // Re-adding a listener reattaches and resyncs from the current source value
+    // (debounced, so after the timeout).
+    debounced.addListener(listener);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(debounced.value, 2);
+
+    debounced.removeListener(listener);
+    source.dispose();
+  });
+
+  test('combineLatest detaches on last listener and resyncs on reattach', () {
+    final a = ValueNotifier<int>(1);
+    final b = ValueNotifier<int>(2);
+    final combined = a.combineLatest<int, int>(b, (x, y) => x + y);
+
+    void listener() {}
+    combined.addListener(listener);
+    expect(combined.value, 3);
+
+    combined.removeListener(listener);
+
+    // Detached: source changes are ignored while unobserved.
+    a.value = 10;
+    expect(combined.value, 3);
+
+    // Reattaching resyncs from the current source values.
+    combined.addListener(listener);
+    expect(combined.value, 12);
+
+    combined.removeListener(listener);
+  });
+
+  test('combineLatest3 detaches on last listener and resyncs on reattach', () {
+    final a = ValueNotifier<int>(1);
+    final b = ValueNotifier<int>(2);
+    final c = ValueNotifier<int>(3);
+    final combined =
+        a.combineLatest3<int, int, int>(b, c, (x, y, z) => x + y + z);
+
+    void listener() {}
+    combined.addListener(listener);
+    expect(combined.value, 6);
+
+    combined.removeListener(listener);
+
+    a.value = 10;
+    expect(combined.value, 6);
+
+    combined.addListener(listener);
+    expect(combined.value, 15);
+
+    combined.removeListener(listener);
+  });
+
+  test('combineLatest4 detaches on last listener and resyncs on reattach', () {
+    final a = ValueNotifier<int>(1);
+    final b = ValueNotifier<int>(2);
+    final c = ValueNotifier<int>(3);
+    final d = ValueNotifier<int>(4);
+    final combined = a.combineLatest4<int, int, int, int>(
+      b,
+      c,
+      d,
+      (w, x, y, z) => w + x + y + z,
+    );
+
+    void listener() {}
+    combined.addListener(listener);
+    expect(combined.value, 10);
+
+    combined.removeListener(listener);
+
+    a.value = 10;
+    expect(combined.value, 10);
+
+    combined.addListener(listener);
+    expect(combined.value, 19);
+
+    combined.removeListener(listener);
+  });
+
+  test('combineLatest5 detaches on last listener and resyncs on reattach', () {
+    final a = ValueNotifier<int>(1);
+    final b = ValueNotifier<int>(2);
+    final c = ValueNotifier<int>(3);
+    final d = ValueNotifier<int>(4);
+    final e = ValueNotifier<int>(5);
+    final combined = a.combineLatest5<int, int, int, int, int>(
+      b,
+      c,
+      d,
+      e,
+      (v, w, x, y, z) => v + w + x + y + z,
+    );
+
+    void listener() {}
+    combined.addListener(listener);
+    expect(combined.value, 15);
+
+    combined.removeListener(listener);
+
+    a.value = 10;
+    expect(combined.value, 15);
+
+    combined.addListener(listener);
+    expect(combined.value, 24);
+
+    combined.removeListener(listener);
+  });
+
+  test('combineLatest6 detaches on last listener and resyncs on reattach', () {
+    final a = ValueNotifier<int>(1);
+    final b = ValueNotifier<int>(2);
+    final c = ValueNotifier<int>(3);
+    final d = ValueNotifier<int>(4);
+    final e = ValueNotifier<int>(5);
+    final f = ValueNotifier<int>(6);
+    final combined = a.combineLatest6<int, int, int, int, int, int>(
+      b,
+      c,
+      d,
+      e,
+      f,
+      (u, v, w, x, y, z) => u + v + w + x + y + z,
+    );
+
+    void listener() {}
+    combined.addListener(listener);
+    expect(combined.value, 21);
+
+    combined.removeListener(listener);
+
+    a.value = 10;
+    expect(combined.value, 21);
+
+    combined.addListener(listener);
+    expect(combined.value, 30);
+
+    combined.removeListener(listener);
   });
 }
 
